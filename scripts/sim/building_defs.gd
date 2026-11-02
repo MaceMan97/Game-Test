@@ -3,7 +3,13 @@ extends RefCounted
 ## Static building data. Pure data: no rendering, no nodes.
 ## Later this can move to Resource files (.tres) or JSON so designers can edit it.
 
+## Optional key "storage": warehouse capacity in units (see Warehouse).
 const DEFS := {
+	"warehouse": {
+		"name": "Distribution hub", "cost": 200, "power": 0, "jobs": 4,
+		"housing": 0, "income": 0, "height": 20.0, "color": Color(0.55, 1.0, 0.35),
+		"storage": 100,
+	},
 	"reactor": {
 		"name": "Fusion reactor", "cost": 300, "power": 40, "jobs": 4,
 		"housing": 0, "income": 0, "height": 40.0, "color": Color(1.0, 0.70, 0.28),

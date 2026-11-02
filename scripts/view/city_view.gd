@@ -17,8 +17,9 @@ const SHACK_COLORS := [
 const SHACK_SLOTS := [Vector2(-0.22, -0.22), Vector2(0.22, -0.22), Vector2(-0.22, 0.22), Vector2(0.22, 0.22)]
 
 var city: CityState
-var tool: String = "apartment"
+var tool: String = ""  # "" = no tool, just inspecting
 var hover := Vector2i(-1, -1)
+var selected := Vector2i(-1, -1)
 
 # The hover marker lives on its own layer so moving the mouse doesn't redraw the whole map.
 var _hover_layer := Node2D.new()
@@ -76,6 +77,48 @@ func _draw() -> void:
 			var id := city.get_building(cell)
 			if id != "":
 				_draw_building(o, BuildingDefs.DEFS[id])
+				if city.warehouses.has(cell):
+					_draw_fill_bar(o + Vector2(0, -BuildingDefs.DEFS[id]["height"] - 6), city.warehouses[cell])
+	_draw_supply_lines()
+
+
+## Dashed lines from the pad to every hub that pulled cargo this tick.
+func _draw_supply_lines() -> void:
+	var pad := cell_to_world(city.landing_pad) + Vector2(0, 2 * TH)
+	for cell in city.warehouses:
+		if city.warehouses[cell].pulled_last_tick > 0:
+			var to := cell_to_world(cell) + Vector2(0, TH)
+			draw_dashed_line(pad, to, Color(0.55, 1.0, 0.35, 0.8), 2.0, 6.0)
+
+
+func _draw_fill_bar(c: Vector2, w: Warehouse) -> void:
+	var size := Vector2(TW * 1.2, 4)
+	var rect := Rect2(c - size / 2, size)
+	draw_rect(rect, Color(0, 0, 0, 0.7))
+	var x := rect.position.x
+	for good in w.stock:
+		var width: float = size.x * w.stock[good] / w.capacity
+		draw_rect(Rect2(Vector2(x, rect.position.y), Vector2(width, size.y)), GoodsDefs.DEFS[good]["color"])
+		x += width
+	draw_rect(rect, Color(1, 1, 1, 0.4), false, 1.0)
+
+
+## Cargo crates stacked around the pad marker, coloured by good.
+func _draw_pad_cargo(c: Vector2) -> void:
+	var slots := 12
+	var per_crate := ceili(float(CityState.PAD_CAPACITY) / slots)
+	var colors: Array[Color] = []
+	for good in city.pad_stock:
+		for k in ceili(float(city.pad_stock[good]) / per_crate):
+			colors.append(GoodsDefs.DEFS[good]["color"])
+	# Ring of slots sorted back to front (by u + v).
+	var spots: Array[Vector2] = []
+	for i in slots:
+		var a := TAU * i / slots
+		spots.append(Vector2(cos(a), sin(a)) * 0.78)
+	spots.sort_custom(func(p, q): return p.x + p.y < q.x + q.y)
+	for i in mini(colors.size(), slots):
+		_draw_box(c + _iso(spots[i].x, spots[i].y), 0.12, 7.0, colors[i])
 
 
 func _diamond(o: Vector2, lift: float = 0.0) -> PackedVector2Array:
@@ -131,7 +174,9 @@ func _draw_terrain(o: Vector2, cell: Vector2i) -> void:
 		TerrainDefs.PAD:
 			_draw_ground(o, Color("16243a"), Color("2a8ab0"))
 			if cell == city.landing_pad + Vector2i(1, 1):
-				_draw_pad_marker(cell_to_world(city.landing_pad) + Vector2(0, 2 * TH))
+				var centre := cell_to_world(city.landing_pad) + Vector2(0, 2 * TH)
+				_draw_pad_marker(centre)
+				_draw_pad_cargo(centre)
 
 
 ## Small isometric box: centre c (screen), half-extent e (cell units), height h, raised by lift.
@@ -224,7 +269,18 @@ func _draw_building(o: Vector2, def: Dictionary) -> void:
 
 ## Draws on _hover_layer, above the map.
 func _draw_hover() -> void:
-	if city == null or not city.in_bounds(hover):
+	if city == null:
+		return
+	if city.in_bounds(selected):
+		var sd := _diamond(cell_to_world(selected))
+		_hover_layer.draw_polyline(_closed(sd), Color(1.0, 0.9, 0.3), 3.0)
+	var placing_hub: bool = BuildingDefs.DEFS.get(tool, {}).get("storage", 0) > 0
+	if placing_hub:
+		_draw_pad_range()
+	if not city.in_bounds(hover):
+		return
+	if tool == "":
+		_hover_layer.draw_polyline(_closed(_diamond(cell_to_world(hover))), Color(1, 1, 1, 0.5), 1.5)
 		return
 	var id := city.get_building(hover)
 	var ok: bool
@@ -235,6 +291,19 @@ func _draw_hover() -> void:
 		ok = id == "" and TerrainDefs.DEFS[city.get_terrain(hover)]["buildable"] \
 				and city.money >= BuildingDefs.DEFS[tool]["cost"]
 	var col := Color(0.16, 0.88, 1.0) if ok else Color(1.0, 0.18, 0.53)
+	if ok and placing_hub and not city.in_pad_range(hover):
+		col = Color(1.0, 0.7, 0.2)  # buildable, but too far to pull from the pad
 	var d := _diamond(cell_to_world(hover))
 	_hover_layer.draw_colored_polygon(d, Color(col, 0.2))
 	_hover_layer.draw_polyline(_closed(d), col, 2.0)
+
+
+## Faint tint over every tile a hub could pull pad cargo from.
+func _draw_pad_range() -> void:
+	var r := Warehouse.RANGE
+	var p := city.landing_pad
+	for y in range(p.y - r, p.y + 2 + r):
+		for x in range(p.x - r, p.x + 2 + r):
+			var cell := Vector2i(x, y)
+			if city.in_bounds(cell) and city.in_pad_range(cell):
+				_hover_layer.draw_colored_polygon(_diamond(cell_to_world(cell)), Color(0.55, 1.0, 0.35, 0.07))

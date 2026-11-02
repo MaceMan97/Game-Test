@@ -50,6 +50,36 @@ turn the city into its own industrial base. The player runs one of them.
 - **Starting position**: a small cleared lot with a landing pad near one corner,
   surrounded by shanty town.
 
+## Logistics: landing pad and distribution hubs
+
+Every resource starts off-world. The flow is:
+
+1. **Buy at the landing pad.** Ordered cargo lands on the pad and waits there.
+   The pad holds a limited amount (`CityState.PAD_CAPACITY`, 120 units), so
+   you can't keep buying until it has been unloaded.
+2. **Distribution hubs pull from the pad.** A hub (warehouse) unloads cargo
+   when it is:
+   - **in range**: within `Warehouse.RANGE` (10) tiles of the pad, by
+     Manhattan distance;
+   - **accepting that good**: each hub has a per-good on/off filter, set by
+     clicking the hub;
+   - **not full**: each hub stores 100 units in total.
+   Each hub pulls up to `Warehouse.PULL_RATE` (8) units per second, nearest hub
+   first, taking goods round-robin so one good can't starve the others.
+3. **Stored goods** wait in hubs for future consumers (construction, factories,
+   housing). Demolishing a hub destroys what it holds.
+
+Starting goods (`GoodsDefs`): building materials, ration packs, fuel cells and
+components, each with an off-world price per unit.
+
+Ideas for later:
+- Hubs pass goods along to other hubs (daisy-chaining range out from the pad).
+- Pull rate and range depend on road access instead of straight-line distance.
+- Trucks or drones you can see moving cargo.
+- Hubs need power or workers to run at full speed.
+- Selling goods off-world from the pad (exports).
+- Buildings consume goods from the nearest hub (e.g. construction uses materials).
+
 ## Shanty residents
 
 Shanty residents are not the corporation's citizens. They are a separate
@@ -101,6 +131,9 @@ Ideas to explore:
 - [x] Basic build / demolish loop with power, housing, jobs and income
 - [x] Starting map: shanty town, boulevards, alleys, rubble, regime ruins and a landing pad
 - [x] Clearing shanties and rubble (costs credits, displaces residents)
+- [x] Buying cargo at the landing pad (limited pad capacity)
+- [x] Distribution hubs: range, per-good filters, limited storage, pull rate
+- [ ] Buildings consuming stored goods
 - [ ] Land ownership and purchase
 - [ ] Shanty residents as labour / unrest
 - [ ] Industry, farms and off-world trade
