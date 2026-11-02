@@ -11,7 +11,7 @@ const NO_TOOL := ""  # nothing to build: clicks only inspect
 
 var tool: String = NO_TOOL
 var selected := NO_SELECTION
-var _tools: Array = BuildingDefs.DEFS.keys() + ["demolish"]
+var _tier_seen: int = 1
 
 
 func _ready() -> void:
@@ -23,6 +23,8 @@ func _ready() -> void:
 	hud.accept_toggled.connect(func(good, on): sim.city.set_accepts(selected, good, on))
 	hud.selection_closed.connect(_select.bind(NO_SELECTION))
 	hud.restart_requested.connect(func(): get_tree().reload_current_scene())
+	hud.sell_requested.connect(_on_sell)
+	hud.auto_export_toggled.connect(func(good, on): sim.city.auto_export[good] = on)
 	sim.ticked.connect(_refresh)
 	# Start the camera over the player's landing pad.
 	camera.position = view.cell_to_world(sim.city.landing_pad + Vector2i(1, 1))
@@ -33,12 +35,19 @@ func _ready() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ESCAPE:
-			_set_tool(NO_TOOL)
+			# First Esc stops building; the next closes the build menu.
+			if tool != NO_TOOL:
+				_set_tool(NO_TOOL)
+			elif hud.is_menu_open():
+				hud.open_category("")
 			_select(NO_SELECTION)
 			return
 		var i: int = event.keycode - KEY_1
-		if i >= 0 and i < _tools.size():
-			_set_tool(_tools[i])
+		if i >= 0 and i < hud.category_count():
+			_set_tool(NO_TOOL)
+			hud.open_category_index(i)
+		elif i == hud.category_count():
+			_set_tool("demolish")
 
 
 func _set_tool(id: String) -> void:
@@ -81,6 +90,19 @@ func _on_buy(good: String, amount: int) -> void:
 
 
 func _refresh() -> void:
+	if sim.city.unlocked_tier > _tier_seen:
+		_tier_seen = sim.city.unlocked_tier
+		var names: Array[String] = []
+		for id in BuildingDefs.DEFS:
+			if BuildingDefs.DEFS[id]["tier"] == _tier_seen:
+				names.append(BuildingDefs.DEFS[id]["name"])
+		hud.show_message("Tier %d unlocked: %s" % [_tier_seen, ", ".join(names)])
 	hud.update_stats(sim.city)
 	hud.update_selection(sim.city, selected)
 	view.refresh()
+
+
+func _on_sell(good: String, amount: int) -> void:
+	var error := sim.city.sell(good, amount)
+	hud.show_message(error if error != "" else "Sold off-world. Credits added.")
+	_refresh()

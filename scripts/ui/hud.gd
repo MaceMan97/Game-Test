@@ -7,13 +7,19 @@ signal buy_requested(good: String, amount: int)
 signal accept_toggled(good: String, on: bool)
 signal selection_closed
 signal restart_requested
+signal sell_requested(good: String, amount: int)
+signal auto_export_toggled(good: String, on: bool)
 
 const BUY_AMOUNT := 10
 const WARN := Color(1.0, 0.3, 0.55)
-const LEDGER_LINES := ["Meal sales", "Rent", "Data sales", "Wages", "Upkeep", "Purchases"]
+const LEDGER_LINES := ["Meal sales", "Rent", "Exports", "Data sales", "Wages", "Upkeep", "Purchases"]
 
 var _stat_labels := {}
-var _buttons := {}
+var _buttons := {}  # tool id (building id or "demolish") -> Button
+var _category_buttons := {}  # category id -> Button
+var _category_rows := {}  # category id -> HBoxContainer of building buttons
+var _open_category := ""
+var _tier_label: Label
 var _message: Label
 var _tile_info: Label
 var _pad_title: Label
@@ -62,21 +68,7 @@ func _ready() -> void:
 	_message.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	bottom.add_child(_message)
 
-	var row := HBoxContainer.new()
-	row.alignment = BoxContainer.ALIGNMENT_CENTER
-	row.add_theme_constant_override("separation", 8)
-	bottom.add_child(row)
-
-	var group := ButtonGroup.new()
-	var n := 1
-	for id in BuildingDefs.DEFS.keys():
-		var def: Dictionary = BuildingDefs.DEFS[id]
-		var price := "%d cr" % def["cost"]
-		if def.get("materials", 0) > 0:
-			price += " + %d mat" % def["materials"]
-		_add_tool_button(row, group, id, "[%d] %s\n%s" % [n, def["name"], price])
-		n += 1
-	_add_tool_button(row, group, "demolish", "[%d] Demolish / Clear\nrefund or cost" % n)
+	_build_construction_menu(bottom)
 	_message.text = "Build a hub, buy materials and food, then a company store. Esc stops building."
 
 	var left := VBoxContainer.new()
@@ -132,19 +124,39 @@ func _build_pad_panel(parent: Container) -> void:
 	var box := _panel(parent)
 	_pad_title = Label.new()
 	box.add_child(_pad_title)
+	var grid := GridContainer.new()
+	grid.columns = 4
+	grid.add_theme_constant_override("h_separation", 6)
+	box.add_child(grid)
+	for header in ["Good  (pad / hubs)", "", "", "Export"]:
+		var h := Label.new()
+		h.text = header
+		h.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
+		grid.add_child(h)
 	for good in GoodsDefs.DEFS:
 		var def: Dictionary = GoodsDefs.DEFS[good]
-		var row := HBoxContainer.new()
-		box.add_child(row)
 		var label := Label.new()
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		label.add_theme_color_override("font_color", def["color"])
-		row.add_child(label)
+		grid.add_child(label)
 		_pad_rows[good] = label
-		var b := Button.new()
-		b.text = "Buy %d (%d cr)" % [BUY_AMOUNT, def["price"] * BUY_AMOUNT]
-		b.pressed.connect(func(): buy_requested.emit(good, BUY_AMOUNT))
-		row.add_child(b)
+		var buy := Button.new()
+		buy.text = "Buy %d  -%d" % [BUY_AMOUNT, def["price"] * BUY_AMOUNT]
+		buy.tooltip_text = "Import %d %s for %d cr (%d each). It lands on the pad." % [
+			BUY_AMOUNT, def["name"].to_lower(), def["price"] * BUY_AMOUNT, def["price"]]
+		buy.pressed.connect(func(): buy_requested.emit(good, BUY_AMOUNT))
+		grid.add_child(buy)
+		var sell := Button.new()
+		sell.text = "Sell %d  +%d" % [BUY_AMOUNT, def["export"] * BUY_AMOUNT]
+		sell.tooltip_text = "Export %d %s from your hubs for %d cr (%d each)." % [
+			BUY_AMOUNT, def["name"].to_lower(), def["export"] * BUY_AMOUNT, def["export"]]
+		sell.pressed.connect(func(): sell_requested.emit(good, BUY_AMOUNT))
+		grid.add_child(sell)
+		var auto := CheckBox.new()
+		auto.text = "Auto"
+		auto.tooltip_text = "Auto-export: at the end of each day, sell everything above %d in your hubs." % CityState.EXPORT_RESERVE
+		auto.toggled.connect(func(on): auto_export_toggled.emit(good, on))
+		grid.add_child(auto)
 
 
 func _build_hub_panel(parent: Container) -> void:
@@ -201,15 +213,133 @@ func _build_bankrupt_overlay() -> void:
 	box.add_child(restart)
 
 
-func _add_tool_button(row: Container, group: ButtonGroup, id: String, text: String) -> void:
+## Category tabs along the bottom; the open category shows its buildings in a row above.
+func _build_construction_menu(parent: Container) -> void:
+	var tools := ButtonGroup.new()
+	tools.allow_unpress = true
+	for category in BuildingDefs.CATEGORIES:
+		var row := HBoxContainer.new()
+		row.alignment = BoxContainer.ALIGNMENT_CENTER
+		row.add_theme_constant_override("separation", 8)
+		row.visible = false
+		parent.add_child(row)
+		_category_rows[category] = row
+		for id in BuildingDefs.in_category(category):
+			var b := _add_tool_button(row, tools, id)
+			b.tooltip_text = _describe(BuildingDefs.DEFS[id])
+
+	var tabs := HBoxContainer.new()
+	tabs.alignment = BoxContainer.ALIGNMENT_CENTER
+	tabs.add_theme_constant_override("separation", 6)
+	parent.add_child(tabs)
+	var n := 1
+	for category in BuildingDefs.CATEGORIES:
+		var tab := Button.new()
+		tab.text = "[%d] %s" % [n, BuildingDefs.CATEGORIES[category]]
+		tab.toggle_mode = true
+		tab.custom_minimum_size = Vector2(110, 34)
+		tab.pressed.connect(open_category.bind(category))
+		tabs.add_child(tab)
+		_category_buttons[category] = tab
+		n += 1
+	var demolish := _add_tool_button(tabs, tools, "demolish")
+	demolish.text = "[%d] Demolish / Clear" % n
+	demolish.custom_minimum_size = Vector2(150, 34)
+	demolish.tooltip_text = "Demolish a building for a 50% refund, or pay to clear shanties and rubble.\nResidents and workers are turned out."
+	_tier_label = Label.new()
+	_tier_label.add_theme_color_override("font_color", Color(1.0, 0.85, 0.35))
+	tabs.add_child(_tier_label)
+
+
+func _add_tool_button(row: Container, group: ButtonGroup, id: String) -> Button:
 	var b := Button.new()
-	b.text = text
 	b.toggle_mode = true
 	b.button_group = group
-	b.custom_minimum_size = Vector2(130, 48)
-	b.pressed.connect(func(): tool_selected.emit(id))
+	b.custom_minimum_size = Vector2(150, 48)
+	b.pressed.connect(func(): tool_selected.emit(id if b.button_pressed else ""))
 	row.add_child(b)
 	_buttons[id] = b
+	return b
+
+
+## Tooltip text for a building: what it costs, needs and does.
+func _describe(def: Dictionary) -> String:
+	var lines: Array[String] = [def["name"]]
+	lines.append("Cost: %d cr%s, upkeep %d/day" % [
+		def["cost"], " + %d materials" % def["materials"] if def.get("materials", 0) > 0 else "", def["upkeep"]])
+	if def.get("jobs", 0) > 0:
+		lines.append("Jobs: %d, paying %d/day" % [def["jobs"], def.get("wage", Economy.WAGE)])
+	if def.get("power", 0) > 0:
+		lines.append("Supplies %d power" % def["power"])
+	elif def.get("power", 0) < 0:
+		lines.append("Needs %d power" % -def["power"])
+	for key in ["consumes", "produces"]:
+		var goods: Dictionary = def.get(key, {})
+		for good in goods:
+			lines.append("%s %d %s/day" % [
+				"Uses" if key == "consumes" else "Makes", goods[good], GoodsDefs.DEFS[good]["name"].to_lower()])
+	if def.has("housing"):
+		lines.append("Houses %d, rent %d/day (tenants need a wage of %d+)" % [
+			def["housing"], def["rent"], def["rent"] + Economy.MEAL_PRICE])
+	if def.has("storage"):
+		lines.append("Stores %d units, pulls cargo from the pad" % def["storage"])
+	if def.has("customers"):
+		lines.append("Sells up to %d meals/day from your food stock" % def["customers"])
+	if def.has("income"):
+		lines.append("Earns up to %d/day off-world" % def["income"])
+	if def["tier"] > 1:
+		lines.append("Tier %d: unlocks at %d people in company housing" % [def["tier"], BuildingDefs.TIER_RESIDENTS[def["tier"]]])
+	return "\n".join(lines)
+
+
+## Opens a build category ("" closes the menu). Clicking the open category closes it.
+## A category with a single unlocked building selects it straight away.
+func open_category(category: String) -> void:
+	if category == _open_category:
+		category = ""
+	_open_category = category
+	for c in _category_rows:
+		_category_rows[c].visible = c == category
+		_category_buttons[c].set_pressed_no_signal(c == category)
+	if category != "":
+		var ids := BuildingDefs.in_category(category)
+		if ids.size() == 1 and not _buttons[ids[0]].disabled:
+			tool_selected.emit(ids[0])
+
+
+func open_category_index(i: int) -> void:
+	var keys := BuildingDefs.CATEGORIES.keys()
+	if i >= 0 and i < keys.size():
+		open_category(keys[i])
+
+
+func category_count() -> int:
+	return BuildingDefs.CATEGORIES.size()
+
+
+func is_menu_open() -> bool:
+	return _open_category != ""
+
+
+## Refreshes build buttons: price, or the requirement if still locked.
+func update_build_menu(city: CityState) -> void:
+	for id in BuildingDefs.DEFS:
+		var def: Dictionary = BuildingDefs.DEFS[id]
+		var b: Button = _buttons[id]
+		b.disabled = not city.is_unlocked(id)
+		if b.disabled:
+			b.text = "%s\nTier %d: %d residents" % [def["name"], def["tier"], BuildingDefs.TIER_RESIDENTS[def["tier"]]]
+		else:
+			var price := "%d cr" % def["cost"]
+			if def.get("materials", 0) > 0:
+				price += " + %d mat" % def["materials"]
+			b.text = "%s\n%s" % [def["name"], price]
+	var next := city.unlocked_tier + 1
+	if BuildingDefs.TIER_RESIDENTS.has(next):
+		_tier_label.text = "  Tier %d  |  Tier %d at %d / %d housed" % [
+			city.unlocked_tier, next, city.apartment_residents, BuildingDefs.TIER_RESIDENTS[next]]
+	else:
+		_tier_label.text = "  Tier %d (max)" % city.unlocked_tier
 
 
 ## Presses the button for id; an unknown id (e.g. "" for no tool) releases them all.
@@ -237,7 +367,7 @@ func update_stats(city: CityState) -> void:
 
 	_pad_title.text = "Landing pad cargo: %d / %d" % [city.pad_total(), CityState.PAD_CAPACITY]
 	for good in _pad_rows:
-		_pad_rows[good].text = "%s: %d" % [GoodsDefs.DEFS[good]["name"], city.pad_stock[good]]
+		_pad_rows[good].text = "%s  %d / %d" % [GoodsDefs.DEFS[good]["name"], city.pad_stock[good], city.count_goods(good)]
 
 	_ledger_title.text = "Day %d books (%d meals sold)" % [city.day - 1, city.meals_served] \
 			if not city.last_day.is_empty() else "Books: first payday at end of day 1"
@@ -249,6 +379,7 @@ func update_stats(city: CityState) -> void:
 	_debt_label.visible = city.debt_days > 0
 	_debt_label.text = "In debt! Bankrupt in %d day(s)" % (Economy.BANKRUPT_DAYS - city.debt_days)
 	_bankrupt_overlay.visible = city.bankrupt
+	update_build_menu(city)
 
 
 ## Shows the panel for the selected distribution hub, or hides it if cell has none.
@@ -292,6 +423,11 @@ func show_tile_info(city: CityState, cell: Vector2i) -> void:
 			var w: Warehouse = city.warehouses[cell]
 			parts.append("%d / %d stored, %s" % [
 				w.total(), w.capacity, "linked to pad" if city.in_pad_range(cell) else "out of pad range"])
+		if def.has("produces"):
+			var good: String = def["produces"].keys()[0]
+			var made: Vector2i = city.output.get(i, Vector2i.ZERO)
+			var note := " (%d WASTED: hubs full)" % (made.y - made.x) if made.x < made.y else ""
+			parts.append("made %d %s yesterday%s" % [made.y, GoodsDefs.DEFS[good]["name"].to_lower(), note])
 		if def.has("consumes"):
 			var needs: Array[String] = []
 			for good in def["consumes"]:

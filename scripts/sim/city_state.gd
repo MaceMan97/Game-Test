@@ -7,6 +7,7 @@ const SIZE := 40
 const PAD_CAPACITY := 120  # cargo units the landing pad can hold before it must be unloaded
 const DAY_TICKS := 10  # ticks (seconds) per in-game day
 const STARTING_WALLET := Vector2i(5, 25)  # range of credits each person starts with
+const EXPORT_RESERVE := 40  # auto-export keeps this much of each good in your hubs
 const NO_BUILDING := {}
 
 var money: int = 1000
@@ -18,12 +19,16 @@ var pad_stock := {}  # good id -> units waiting on the pad
 var warehouses := {}  # Vector2i -> Warehouse
 var people := Population.new()
 var supplied := {}  # cell index -> bool: did this building get its daily inputs?
+var output := {}  # cell index -> Vector2i(units stored, units made) from the last day
+var unlocked_tier: int = 1
 var rng := RandomNumberGenerator.new()
 
 # Day cycle and company books.
 var day: int = 1
 var tick_in_day: int = 0
 var spent_today: int = 0  # purchases, construction and clearing since the last day ended
+var exported_today: int = 0  # credits from off-world sales since the last day ended
+var auto_export := {}  # good id -> bool: sell surplus above EXPORT_RESERVE at the end of each day
 var last_day := {}  # ledger line -> credits, from Economy.run_day
 var debt_days: int = 0
 var bankrupt: bool = false
@@ -50,6 +55,7 @@ func _init(map_seed: int = 1) -> void:
 	density.resize(SIZE * SIZE)
 	for good in GoodsDefs.DEFS:
 		pad_stock[good] = 0
+		auto_export[good] = false
 	MapGenerator.generate(self, map_seed)
 	rng.seed = map_seed
 	# Fill every shanty with people, each with a little money to seed the economy.
@@ -149,6 +155,9 @@ func build(cell: Vector2i, id: String) -> String:
 			return "%s is in the way. Clear it first." % ground["name"]
 		return "Can't build on %s." % ground["name"].to_lower()
 	var def: Dictionary = BuildingDefs.DEFS[id]
+	if def["tier"] > unlocked_tier:
+		return "%s unlocks at %d people in company housing." % [
+			def["name"], BuildingDefs.TIER_RESIDENTS[def["tier"]]]
 	if money < def["cost"]:
 		return "Not enough credits for %s (%d needed)." % [def["name"], def["cost"]]
 	var mats: int = def.get("materials", 0)
@@ -182,6 +191,7 @@ func demolish(cell: Vector2i) -> String:
 		grid[idx(cell)] = ""
 		warehouses.erase(cell)  # stored goods are lost with it
 		supplied.erase(idx(cell))
+		output.erase(idx(cell))
 		_update_stats()
 		return ""
 	var cost := clear_cost(cell)
@@ -220,6 +230,43 @@ func buy(good: String, amount: int) -> String:
 	spent_today += cost
 	pad_stock[good] += amount
 	return ""
+
+
+## Sells goods from your hubs off-world at the export price. Sells as much as you have.
+func sell(good: String, amount: int) -> String:
+	if bankrupt:
+		return "The company is bankrupt."
+	var sold := take_goods(good, amount)
+	if sold == 0:
+		return "No %s in your hubs to sell." % GoodsDefs.DEFS[good]["name"].to_lower()
+	var earned: int = sold * GoodsDefs.DEFS[good]["export"]
+	money += earned
+	exported_today += earned
+	return ""
+
+
+## End-of-day auto-export of everything above the reserve.
+func export_surplus() -> void:
+	for good in auto_export:
+		var surplus := count_goods(good) - EXPORT_RESERVE
+		if auto_export[good] and surplus > 0:
+			sell(good, surplus)
+
+
+func is_unlocked(id: String) -> bool:
+	return BuildingDefs.DEFS[id]["tier"] <= unlocked_tier
+
+
+## Puts goods made on-world into hubs that accept them and have room.
+## Returns how many fit; the rest is wasted.
+func store_goods(good: String, amount: int) -> int:
+	var stored := 0
+	for w in warehouses.values():
+		if w.accepts[good]:
+			var t: int = mini(amount - stored, w.space())
+			w.stock[good] += t
+			stored += t
+	return stored
 
 
 ## Units of a good across all hubs.
@@ -316,6 +363,10 @@ func _update_stats() -> void:
 		if terrain[i] == TerrainDefs.SHANTY:
 			shanty_population += people.residents_at(i)
 	homeless = people.size() - shanty_population - apartment_residents
+
+	while BuildingDefs.TIER_RESIDENTS.has(unlocked_tier + 1) \
+			and apartment_residents >= BuildingDefs.TIER_RESIDENTS[unlocked_tier + 1]:
+		unlocked_tier += 1
 
 	storage_used = 0
 	storage_capacity = 0

@@ -99,31 +99,44 @@ seed the economy.
    2 fuel cells; data hubs use 2 components. Without them they produce nothing
    that day.
 3. **Income**: data hubs sell data off-world (350/day when fully staffed,
-   powered and supplied). This is the main source of outside money for now.
-4. **Payday**: every worker gets `Economy.WAGE` (10) credits from the company.
+   powered and supplied).
+4. **Payday**: every worker gets their building's wage: `Economy.WAGE` (10)
+   by default, 12 for tier 2 industry, 18 for skilled tier 3 jobs.
 5. **Meals**: company stores sell one ration pack per person per day for
    `Economy.MEAL_PRICE` (5 credits; it costs 3 to import). They are limited by
    store capacity (60 a day per fully staffed store) and by food in your hubs.
    Unemployed shanty dwellers spend their starting money here too.
-6. **Rent**: apartment residents pay rent (4/day). Anyone who can't pay is
-   evicted.
-7. **Moving**: workers with two days' rent saved move into vacant apartments,
-   up to 2 per tower per day, so towers fill gradually. Homeless people
-   (evicted, or from cleared shanties) squat in any shanty with room.
-8. **Debt**: ending `Economy.BANKRUPT_DAYS` (3) days in a row below zero
-   credits bankrupts the company. Game over.
+6. **Rent**: apartment residents pay rent. Anyone who can't pay is evicted.
+7. **Production**: factories and farms put their output into hubs that accept
+   that good and have room. Whatever doesn't fit is wasted (tile info warns
+   you).
+8. **Moving**: workers move into vacant apartments, best apartments first, up to
+   2 per building per day. A worker moves in if their wage minus a meal covers
+   the rent, they have two days' rent saved, and it's an upgrade on where they
+   live now. So skilled workers leave capsule towers for Skyline suites.
+   Homeless people (evicted, or from cleared shanties) squat in any shanty with
+   room.
+9. **Exports**: goods with auto-export on are sold off-world, keeping
+   `CityState.EXPORT_RESERVE` (40) of each in your hubs. You can also sell by
+   hand at the pad.
+10. **Debt**: ending `Economy.BANKRUPT_DAYS` (3) days in a row below zero
+    credits bankrupts the company. Game over.
+
+**Where the money comes from:** wages mostly come back as meals and rent,
+but never all of it. Real profit needs outside money: shanty dwellers' savings
+(early, and finite), **exports** of goods made on-world, and **data hubs**.
 
 **Staffing matters**: a building's output scales with how many of its job
 slots are filled (and with power, for consumers). An understaffed hub pulls
 cargo more slowly.
 
-**Goods and why you buy them:**
-| Good | Used by |
-|---|---|
-| Building materials | Construction (every building except hubs) |
-| Ration packs | Sold to people at company stores |
-| Fuel cells | Fusion reactors (2/day) |
-| Components | Data hubs (2/day) |
+**Goods** (import price / export price per unit):
+| Good | Import / export | Used by | Made by |
+|---|---|---|---|
+| Building materials | 4 / 3 | Construction, component fab (6/day) | Fabrication plant (40/day) |
+| Ration packs | 3 / 2 | Sold to people at company stores | Hydroponic farm (20), protein vats (50) |
+| Fuel cells | 8 / 6 | Fusion reactor (2/day), fabrication plant (1/day) | Fuel refinery (14/day) |
+| Components | 12 / 9 | Data hub (2/day) | Component fab (16/day) |
 
 **How you go bankrupt:** buildings cost wages and upkeep every day whether or
 not they earn anything. Overbuying cargo, building hubs and reactors before
@@ -136,7 +149,8 @@ Ideas for later:
 - Wage and price sliders, with unrest as the cost of squeezing too hard.
 - Shanty dwellers paying informal rent or "protection".
 - Apartments needing power, with unhappiness during blackouts.
-- Pay that varies by building type or skill.
+- Shanty savings eventually run out, so early meal sales fade. Watch whether
+  mid-game income needs another source.
 
 ## Shanty residents
 
@@ -159,14 +173,38 @@ Ideas to explore:
   arms manufacturer, trade cartel). Specialities to be decided.
 - They compete for the same land: bidding, buyouts and eventually force.
 
-## Buildings (planned categories)
+## Buildings and progression
 
-- **Industry**: factories that turn raw input into goods.
-- **Power**: reactors and other generators (the reactor exists already).
-- **Food**: farms and vat-growth facilities.
-- **Housing**: capsule towers for corporate workers (exists already).
-- **Commerce**: markets and data hubs (exist already).
-- **Trade**: landing pads and spaceports for off-world import and export.
+The construction menu is grouped by category (`BuildingDefs.CATEGORIES`):
+number keys 1–6 open a category, 7 is demolish, and Esc steps back out
+(first stops building, then closes the menu). Hover a button to see its full
+stats.
+
+Buildings unlock in **tiers**, gated by how many people live in company housing
+(`BuildingDefs.TIER_RESIDENTS`). Unlocks are permanent. To house more people you
+need more workers, so each tier is earned by building out jobs and housing,
+not just by saving credits.
+
+| Tier | Unlocks at | Category | Building | Role |
+|---|---|---|---|---|
+| 1 | start | Logistics | Distribution hub | Pulls pad cargo, stores goods |
+| 1 | start | Commerce | Company store | Sells meals |
+| 1 | start | Housing | Capsule tower | 20 homes, rent 4 |
+| 1 | start | Food | Hydroponic farm | 20 food/day, no power |
+| 2 | 20 housed | Power | Fusion reactor | 40 power, burns fuel |
+| 2 | 20 housed | Food | Protein vats | 50 food/day |
+| 2 | 20 housed | Industry | Fabrication plant | Fuel → 40 materials/day |
+| 2 | 20 housed | Industry | Fuel refinery | 14 fuel/day |
+| 3 | 60 housed | Industry | Component fab | Materials → 16 components/day |
+| 3 | 60 housed | Commerce | Data hub | Components → 350 credits/day |
+| 3 | 60 housed | Housing | Skyline suites | 12 homes, rent 12 (needs wage 17+) |
+
+Balance notes (from a scripted test run): a reasonable player reaches tier 2
+around day 15–20 and needs to expand jobs deliberately to reach tier 3. Tier 1
+earns tens of credits a day, and tier 2 industry with exports earns hundreds.
+
+Still planned:
+- **Trade**: spaceport upgrades to the pad (more capacity, better prices).
 - **Security / military**: needed for the district conflict phase.
 
 ## Districts and conflict (later)
@@ -195,8 +233,10 @@ Ideas to explore:
 - [x] Buildings consuming stored goods (construction, fuel, components, food)
 - [x] Simulated people: homes, jobs, wallets, wages, meals, rent
 - [x] Daily ledger and bankruptcy
+- [x] Categorized construction menu with tiered unlocks
+- [x] Farms, factories, skilled jobs and luxury housing
+- [x] Off-world exports (manual and auto with reserve)
 - [ ] Land ownership and purchase
 - [ ] Unrest / hunger consequences
-- [ ] Industry, farms and off-world trade
 - [ ] Rival corporations
 - [ ] Districts and conflict

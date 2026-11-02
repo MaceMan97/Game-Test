@@ -57,8 +57,9 @@ static func run_day(city: CityState) -> void:
 	# Payday.
 	for i in people.size():
 		if people.job[i] != Population.NONE:
-			people.money[i] += WAGE
-			ledger["Wages"] -= WAGE
+			var pay := wage_at(city, people.job[i])
+			people.money[i] += pay
+			ledger["Wages"] -= pay
 
 	# Company stores sell one meal per person, while stock and store capacity last.
 	var capacity := 0
@@ -90,12 +91,25 @@ static func run_day(city: CityState) -> void:
 		else:
 			people.set_home(i, Population.NONE)
 
+	# On-world production goes into hubs after meals have freed up space.
+	# Whatever doesn't fit is wasted.
+	city.output.clear()
+	for cell in city.building_cells():
+		var makes: Dictionary = city.building_def(cell).get("produces", {})
+		for good in makes:
+			var wanted := roundi(makes[good] * city.effectiveness(cell))
+			city.output[cell] = Vector2i(city.store_goods(good, wanted), wanted)
+
 	_move_into_apartments(city)
 	_rehome_in_shanties(city)
 
 	for line in ledger:
 		if line != "Purchases":
 			city.money += ledger[line]
+	# Exports are paid out as they happen (manual sales during the day, auto-export now).
+	city.export_surplus()
+	ledger["Exports"] = city.exported_today
+	city.exported_today = 0
 	var net := 0
 	for line in ledger:
 		net += ledger[line]
@@ -107,30 +121,39 @@ static func run_day(city: CityState) -> void:
 		city.bankrupt = true
 
 
-## Workers with enough savings move into vacant company apartments, a few per tower per day.
+static func wage_at(city: CityState, job_cell: int) -> int:
+	return city.building_def(job_cell).get("wage", WAGE)
+
+
+## Workers move into vacant company apartments, a few per building per day, best
+## apartments first. A worker moves if their wage covers the rent after a meal,
+## they have SAVINGS_TO_MOVE days of rent saved, and it's better than where they live.
 static func _move_into_apartments(city: CityState) -> void:
 	var people := city.people
-	var vacancies: Array[int] = []
+	var apartments: Array[int] = []
 	for cell in city.building_cells():
-		var def := city.building_def(cell)
-		var free: int = mini(def.get("housing", 0) - people.residents_at(cell), MOVE_INS_PER_DAY)
-		for s in free:
-			vacancies.append(cell)
-	if vacancies.is_empty():
+		if city.building_def(cell).get("housing", 0) > 0:
+			apartments.append(cell)
+	if apartments.is_empty():
 		return
-	var v := 0
-	var start := city.rng.randi() % maxi(1, people.size())
-	for k in people.size():
-		var i := (start + k) % people.size()
-		var rent: int = city.building_def(vacancies[v]).get("rent", 0)
-		if people.job[i] == Population.NONE or people.money[i] < rent * SAVINGS_TO_MOVE:
-			continue
-		if city.building_def(people.home[i]).get("rent", 0) > 0:
-			continue  # already in an apartment
-		people.set_home(i, vacancies[v])
-		v += 1
-		if v == vacancies.size():
-			return
+	apartments.sort_custom(func(a, b): return city.building_def(a)["rent"] > city.building_def(b)["rent"])
+	var workers: Array[int] = []
+	for i in people.size():
+		if people.job[i] != Population.NONE:
+			workers.append(i)
+	for cell in apartments:
+		var def := city.building_def(cell)
+		var rent: int = def["rent"]
+		var free: int = mini(def["housing"] - people.residents_at(cell), MOVE_INS_PER_DAY)
+		for i in workers:
+			if free <= 0:
+				break
+			if wage_at(city, people.job[i]) - MEAL_PRICE < rent or people.money[i] < rent * SAVINGS_TO_MOVE:
+				continue
+			if city.building_def(people.home[i]).get("rent", 0) >= rent:
+				continue  # already living somewhere at least as good
+			people.set_home(i, cell)
+			free -= 1
 
 
 ## Homeless people squat in any shanty with room.
