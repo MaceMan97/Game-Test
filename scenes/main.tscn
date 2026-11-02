@@ -1,0 +1,23 @@
+[gd_scene load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" path="res://scripts/sim/simulation.gd" id="2_sim"]
+[ext_resource type="Script" path="res://scripts/view/city_view.gd" id="3_view"]
+[ext_resource type="Script" path="res://scripts/view/camera_controller.gd" id="4_cam"]
+[ext_resource type="Script" path="res://scripts/ui/hud.gd" id="5_hud"]
+
+[node name="Main" type="Node"]
+script = ExtResource("1_main")
+
+[node name="Simulation" type="Node" parent="."]
+script = ExtResource("2_sim")
+
+[node name="CityView" type="Node2D" parent="."]
+script = ExtResource("3_view")
+
+[node name="Camera" type="Camera2D" parent="."]
+position = Vector2(0, 352)
+script = ExtResource("4_cam")
+
+[node name="Hud" type="CanvasLayer" parent="."]
+script = ExtResource("5_hud")
