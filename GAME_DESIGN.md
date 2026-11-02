@@ -78,17 +78,76 @@ Ideas for later:
 - Trucks or drones you can see moving cargo.
 - Hubs need power or workers to run at full speed.
 - Selling goods off-world from the pad (exports).
-- Buildings consume goods from the nearest hub (e.g. construction uses materials).
+- Buildings take goods from the nearest hub rather than from all hubs at once.
+
+## Economy: the company town
+
+The company makes money by selling to the people it employs and houses:
+company-store economics. Wages go out, and most come back as meal sales and
+rent. Real profit comes from margins and from off-world income.
+
+**People** (`Population`) are simulated one by one (about 9,800 at the start).
+Each person has a home (a shanty tile or a company apartment), maybe a job, and
+a wallet. Everyone starts with 5–25 credits (`CityState.STARTING_WALLET`) to
+seed the economy.
+
+**Every tick:** unemployed people fill open job slots in your buildings.
+
+**Every day** (`CityState.DAY_TICKS`, 10 ticks), in `Economy.run_day`:
+1. **Upkeep**: each building charges its daily upkeep.
+2. **Inputs**: buildings take their daily goods from hubs. Reactors burn
+   2 fuel cells; data hubs use 2 components. Without them they produce nothing
+   that day.
+3. **Income**: data hubs sell data off-world (350/day when fully staffed,
+   powered and supplied). This is the main source of outside money for now.
+4. **Payday**: every worker gets `Economy.WAGE` (10) credits from the company.
+5. **Meals**: company stores sell one ration pack per person per day for
+   `Economy.MEAL_PRICE` (5 credits; it costs 3 to import). They are limited by
+   store capacity (60 a day per fully staffed store) and by food in your hubs.
+   Unemployed shanty dwellers spend their starting money here too.
+6. **Rent**: apartment residents pay rent (4/day). Anyone who can't pay is
+   evicted.
+7. **Moving**: workers with two days' rent saved move into vacant apartments,
+   up to 2 per tower per day, so towers fill gradually. Homeless people
+   (evicted, or from cleared shanties) squat in any shanty with room.
+8. **Debt**: ending `Economy.BANKRUPT_DAYS` (3) days in a row below zero
+   credits bankrupts the company. Game over.
+
+**Staffing matters**: a building's output scales with how many of its job
+slots are filled (and with power, for consumers). An understaffed hub pulls
+cargo more slowly.
+
+**Goods and why you buy them:**
+| Good | Used by |
+|---|---|
+| Building materials | Construction (every building except hubs) |
+| Ration packs | Sold to people at company stores |
+| Fuel cells | Fusion reactors (2/day) |
+| Components | Data hubs (2/day) |
+
+**How you go bankrupt:** buildings cost wages and upkeep every day whether or
+not they earn anything. Overbuying cargo, building hubs and reactors before
+you have income, or letting a data hub run out of components all drain
+credits.
+
+Ideas for later:
+- Hunger consequences: people who go days without a company meal could grow
+  unrest, work worse, or leave. (Hungry days are already tracked per person.)
+- Wage and price sliders, with unrest as the cost of squeezing too hard.
+- Shanty dwellers paying informal rent or "protection".
+- Apartments needing power, with unhappiness during blackouts.
+- Pay that varies by building type or skill.
 
 ## Shanty residents
 
 Shanty residents are not the corporation's citizens. They are a separate
-population living on land the corporations want.
+population living on land the corporations want. They are now simulated as
+people (see Economy): they work your jobs and spend their savings at your
+stores.
 
 Ideas to explore:
-- A **labour pool** that factories hire from (cheap, unskilled labour).
-- **Displacement** when clearing: residents move to nearby shanties
-  (raising density), leave, or become unrest.
+- **Displacement** when clearing: evicted residents currently squat in any
+  shanty with room, or become homeless. They could also leave or become unrest.
 - **Unrest / resistance**: aggressive clearing could cause protests, sabotage or
   an opening for rivals.
 - Option to **upgrade** shanties into proper housing instead of razing them.
@@ -133,9 +192,11 @@ Ideas to explore:
 - [x] Clearing shanties and rubble (costs credits, displaces residents)
 - [x] Buying cargo at the landing pad (limited pad capacity)
 - [x] Distribution hubs: range, per-good filters, limited storage, pull rate
-- [ ] Buildings consuming stored goods
+- [x] Buildings consuming stored goods (construction, fuel, components, food)
+- [x] Simulated people: homes, jobs, wallets, wages, meals, rent
+- [x] Daily ledger and bankruptcy
 - [ ] Land ownership and purchase
-- [ ] Shanty residents as labour / unrest
+- [ ] Unrest / hunger consequences
 - [ ] Industry, farms and off-world trade
 - [ ] Rival corporations
 - [ ] Districts and conflict

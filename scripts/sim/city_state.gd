@@ -4,27 +4,41 @@ extends RefCounted
 ## so it can be unit-tested, saved, and later run on a thread.
 
 const SIZE := 40
-const JOB_WAGE := 3
 const PAD_CAPACITY := 120  # cargo units the landing pad can hold before it must be unloaded
+const DAY_TICKS := 10  # ticks (seconds) per in-game day
+const STARTING_WALLET := Vector2i(5, 25)  # range of credits each person starts with
+const NO_BUILDING := {}
 
 var money: int = 1000
-var population: int = 0
 var grid: Array[String] = []
 var terrain := PackedByteArray()  # TerrainDefs enum per cell
 var density := PackedByteArray()  # shanty density 1-3 (0 elsewhere)
 var landing_pad := Vector2i.ZERO  # top-left cell of the player's 2x2 pad
 var pad_stock := {}  # good id -> units waiting on the pad
 var warehouses := {}  # Vector2i -> Warehouse
+var people := Population.new()
+var supplied := {}  # cell index -> bool: did this building get its daily inputs?
+var rng := RandomNumberGenerator.new()
+
+# Day cycle and company books.
+var day: int = 1
+var tick_in_day: int = 0
+var spent_today: int = 0  # purchases, construction and clearing since the last day ended
+var last_day := {}  # ledger line -> credits, from Economy.run_day
+var debt_days: int = 0
+var bankrupt: bool = false
+var meals_served: int = 0
 
 # Derived stats, recomputed every tick.
 var power_supply: int = 0
 var power_demand: int = 0
 var power_ratio: float = 1.0
 var jobs: int = 0
-var housing: int = 0
 var employed: int = 0
-var net_income: int = 0
+var apartment_residents: int = 0
+var apartment_capacity: int = 0
 var shanty_population: int = 0
+var homeless: int = 0
 var storage_used: int = 0
 var storage_capacity: int = 0
 
@@ -37,28 +51,52 @@ func _init(map_seed: int = 1) -> void:
 	for good in GoodsDefs.DEFS:
 		pad_stock[good] = 0
 	MapGenerator.generate(self, map_seed)
-	_count_shanty_population()
+	rng.seed = map_seed
+	# Fill every shanty with people, each with a little money to seed the economy.
+	for i in SIZE * SIZE:
+		for p in housing_capacity(i):
+			people.add(i, rng.randi_range(STARTING_WALLET.x, STARTING_WALLET.y))
+	_update_stats()
 
 
 func in_bounds(cell: Vector2i) -> bool:
 	return cell.x >= 0 and cell.y >= 0 and cell.x < SIZE and cell.y < SIZE
 
 
+func idx(cell: Vector2i) -> int:
+	return cell.y * SIZE + cell.x
+
+
 func get_building(cell: Vector2i) -> String:
-	return grid[cell.y * SIZE + cell.x]
+	return grid[idx(cell)]
+
+
+## Building data for a cell index; empty if there is no building (or i is Population.NONE).
+func building_def(i: int) -> Dictionary:
+	if i < 0 or grid[i] == "":
+		return NO_BUILDING
+	return BuildingDefs.DEFS[grid[i]]
+
+
+func building_cells() -> Array[int]:
+	var out: Array[int] = []
+	for i in grid.size():
+		if grid[i] != "":
+			out.append(i)
+	return out
 
 
 func get_terrain(cell: Vector2i) -> int:
-	return terrain[cell.y * SIZE + cell.x]
+	return terrain[idx(cell)]
 
 
 func get_density(cell: Vector2i) -> int:
-	return density[cell.y * SIZE + cell.x]
+	return density[idx(cell)]
 
 
 func set_terrain(cell: Vector2i, type: int, level: int = 0) -> void:
-	terrain[cell.y * SIZE + cell.x] = type
-	density[cell.y * SIZE + cell.x] = level
+	terrain[idx(cell)] = type
+	density[idx(cell)] = level
 
 
 ## Credits to clear the terrain on this cell, or -1 if it cannot be cleared.
@@ -69,12 +107,38 @@ func clear_cost(cell: Vector2i) -> int:
 	return cost
 
 
+## How many people can live on a cell index (shanty or apartment).
+func housing_capacity(i: int) -> int:
+	if grid[i] != "":
+		return building_def(i).get("housing", 0)
+	return TerrainDefs.DEFS[terrain[i]]["housing"] * density[i]
+
+
 func residents_at(cell: Vector2i) -> int:
-	return TerrainDefs.DEFS[get_terrain(cell)]["residents"] * get_density(cell)
+	return people.residents_at(idx(cell))
+
+
+func workers_at(cell: Vector2i) -> int:
+	return people.workers_at(idx(cell))
+
+
+## 0..1: how well a building is running, from staffing, power and daily inputs.
+func effectiveness(i: int) -> float:
+	var def := building_def(i)
+	var e := 1.0
+	if def.get("jobs", 0) > 0:
+		e = float(people.workers_at(i)) / def["jobs"]
+	if def.get("power", 0) < 0:
+		e *= power_ratio
+	if def.has("consumes") and not supplied.get(i, false):
+		e = 0.0
+	return e
 
 
 ## Returns "" on success, otherwise a message explaining why it failed.
 func build(cell: Vector2i, id: String) -> String:
+	if bankrupt:
+		return "The company is bankrupt."
 	if not in_bounds(cell):
 		return "Out of bounds."
 	if get_building(cell) != "":
@@ -87,22 +151,38 @@ func build(cell: Vector2i, id: String) -> String:
 	var def: Dictionary = BuildingDefs.DEFS[id]
 	if money < def["cost"]:
 		return "Not enough credits for %s (%d needed)." % [def["name"], def["cost"]]
+	var mats: int = def.get("materials", 0)
+	if count_goods("materials") < mats:
+		return "%s needs %d building materials in your hubs (have %d)." % [
+			def["name"], mats, count_goods("materials")]
 	money -= def["cost"]
-	grid[cell.y * SIZE + cell.x] = id
+	spent_today += def["cost"]
+	take_goods("materials", mats)
+	grid[idx(cell)] = id
 	if def.get("storage", 0) > 0:
 		warehouses[cell] = Warehouse.new(def["storage"])
+	if def.has("consumes"):
+		supplied[idx(cell)] = consume(def["consumes"])
+	_update_stats()
 	return ""
 
 
 ## Demolishes a building (50% refund) or clears shanty/rubble terrain (costs credits).
+## Anyone living or working there is turned out.
 func demolish(cell: Vector2i) -> String:
+	if bankrupt:
+		return "The company is bankrupt."
 	if not in_bounds(cell):
 		return "Out of bounds."
 	if get_building(cell) != "":
 		var def: Dictionary = BuildingDefs.DEFS[get_building(cell)]
 		money += def["cost"] / 2
-		grid[cell.y * SIZE + cell.x] = ""
+		spent_today -= def["cost"] / 2
+		people.vacate(idx(cell))
+		grid[idx(cell)] = ""
 		warehouses.erase(cell)  # stored goods are lost with it
+		supplied.erase(idx(cell))
+		_update_stats()
 		return ""
 	var cost := clear_cost(cell)
 	if cost < 0:
@@ -110,8 +190,10 @@ func demolish(cell: Vector2i) -> String:
 	if money < cost:
 		return "Not enough credits to clear (%d needed)." % cost
 	money -= cost
+	spent_today += cost
+	people.vacate(idx(cell))
 	set_terrain(cell, TerrainDefs.OPEN)
-	_count_shanty_population()
+	_update_stats()
 	return ""
 
 
@@ -123,7 +205,10 @@ func pad_total() -> int:
 
 
 ## Orders cargo off-world; it lands on the pad. Buys as much as fits.
+## Purchases cannot take credits below zero, but wages and upkeep can.
 func buy(good: String, amount: int) -> String:
+	if bankrupt:
+		return "The company is bankrupt."
 	var space := PAD_CAPACITY - pad_total()
 	if space <= 0:
 		return "Landing pad is full. Build a distribution hub nearby to unload it."
@@ -132,8 +217,39 @@ func buy(good: String, amount: int) -> String:
 	if money < cost:
 		return "Not enough credits for %d %s (%d needed)." % [amount, GoodsDefs.DEFS[good]["name"], cost]
 	money -= cost
+	spent_today += cost
 	pad_stock[good] += amount
 	return ""
+
+
+## Units of a good across all hubs.
+func count_goods(good: String) -> int:
+	var sum := 0
+	for w in warehouses.values():
+		sum += w.stock[good]
+	return sum
+
+
+## Removes up to amount of a good from hubs, fullest first. Returns how many were taken.
+func take_goods(good: String, amount: int) -> int:
+	var hubs: Array = warehouses.values()
+	hubs.sort_custom(func(a, b): return a.stock[good] > b.stock[good])
+	var taken := 0
+	for w in hubs:
+		var t: int = mini(amount - taken, w.stock[good])
+		w.stock[good] -= t
+		taken += t
+	return taken
+
+
+## Takes a building's daily inputs if every one is in stock; returns whether it could.
+func consume(needs: Dictionary) -> bool:
+	for good in needs:
+		if count_goods(good) < needs[good]:
+			return false
+	for good in needs:
+		take_goods(good, needs[good])
+	return true
 
 
 ## Manhattan distance from a cell to the nearest tile of the 2x2 landing pad.
@@ -153,6 +269,7 @@ func set_accepts(cell: Vector2i, good: String, on: bool) -> void:
 
 
 ## Warehouses in range pull cargo off the pad, nearest first, a unit of each good per pass.
+## Understaffed hubs pull more slowly.
 func _distribute() -> void:
 	var hubs: Array = warehouses.keys().filter(in_pad_range)
 	hubs.sort_custom(func(a, b): return distance_to_pad(a) < distance_to_pad(b))
@@ -160,11 +277,12 @@ func _distribute() -> void:
 		w.pulled_last_tick = 0
 	for cell in hubs:
 		var w: Warehouse = warehouses[cell]
+		var rate := roundi(Warehouse.PULL_RATE * effectiveness(idx(cell)))
 		var moved := true
-		while moved and w.pulled_last_tick < Warehouse.PULL_RATE and w.space() > 0:
+		while moved and w.pulled_last_tick < rate and w.space() > 0:
 			moved = false
 			for good in pad_stock:
-				if w.pulled_last_tick >= Warehouse.PULL_RATE or w.space() <= 0:
+				if w.pulled_last_tick >= rate or w.space() <= 0:
 					break
 				if w.accepts[good] and pad_stock[good] > 0:
 					pad_stock[good] -= 1
@@ -173,51 +291,48 @@ func _distribute() -> void:
 					moved = true
 
 
-func _count_shanty_population() -> void:
+func _update_stats() -> void:
+	power_supply = 0
+	power_demand = 0
+	jobs = 0
+	employed = 0
+	apartment_residents = 0
+	apartment_capacity = 0
+	for i in building_cells():
+		var def := building_def(i)
+		var p: int = def.get("power", 0)
+		if p > 0:
+			power_supply += roundi(p * effectiveness(i))
+		else:
+			power_demand -= p
+		jobs += def.get("jobs", 0)
+		employed += people.workers_at(i)
+		apartment_capacity += def.get("housing", 0)
+		apartment_residents += people.residents_at(i)
+	power_ratio = 1.0 if power_demand == 0 else minf(1.0, float(power_supply) / power_demand)
+
 	shanty_population = 0
-	for y in SIZE:
-		for x in SIZE:
-			shanty_population += residents_at(Vector2i(x, y))
+	for i in SIZE * SIZE:
+		if terrain[i] == TerrainDefs.SHANTY:
+			shanty_population += people.residents_at(i)
+	homeless = people.size() - shanty_population - apartment_residents
 
-
-## One simulation step (the Simulation node calls this once per second).
-func tick() -> void:
-	_distribute()
 	storage_used = 0
 	storage_capacity = 0
 	for w in warehouses.values():
 		storage_used += w.total()
 		storage_capacity += w.capacity
 
-	power_supply = 0
-	power_demand = 0
-	jobs = 0
-	housing = 0
-	var business_income := 0
-	var building_count := 0
 
-	for id in grid:
-		if id == "":
-			continue
-		var def: Dictionary = BuildingDefs.DEFS[id]
-		building_count += 1
-		var p: int = def["power"]
-		if p > 0:
-			power_supply += p
-		else:
-			power_demand -= p
-		jobs += def["jobs"]
-		housing += def["housing"]
-		business_income += def["income"]
-
-	power_ratio = 1.0 if power_demand == 0 else minf(1.0, float(power_supply) / power_demand)
-
-	# Population drifts toward housing capacity; blackouts choke growth.
-	var capacity := float(housing) * (1.0 if power_ratio >= 0.6 else 0.3)
-	var diff := capacity - population
-	var step := maxf(1.0, population * 0.1)
-	population += roundi(signf(diff) * minf(absf(diff), step))
-
-	employed = mini(population, floori(jobs * power_ratio))
-	net_income = roundi(employed * JOB_WAGE + business_income * power_ratio - building_count)
-	money += net_income
+## One simulation step (the Simulation node calls this once per second).
+func tick() -> void:
+	if bankrupt:
+		return
+	Economy.assign_jobs(self)
+	_update_stats()
+	_distribute()
+	tick_in_day += 1
+	if tick_in_day >= DAY_TICKS:
+		tick_in_day = 0
+		Economy.run_day(self)
+	_update_stats()

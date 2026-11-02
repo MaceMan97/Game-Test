@@ -22,6 +22,7 @@ func _ready() -> void:
 	hud.buy_requested.connect(_on_buy)
 	hud.accept_toggled.connect(func(good, on): sim.city.set_accepts(selected, good, on))
 	hud.selection_closed.connect(_select.bind(NO_SELECTION))
+	hud.restart_requested.connect(func(): get_tree().reload_current_scene())
 	sim.ticked.connect(_refresh)
 	# Start the camera over the player's landing pad.
 	camera.position = view.cell_to_world(sim.city.landing_pad + Vector2i(1, 1))
