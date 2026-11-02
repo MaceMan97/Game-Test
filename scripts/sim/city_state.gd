@@ -3,12 +3,15 @@ extends RefCounted
 ## All simulation data and rules. Knows nothing about rendering or UI,
 ## so it can be unit-tested, saved, and later run on a thread.
 
-const SIZE := 22
+const SIZE := 40
 const JOB_WAGE := 3
 
 var money: int = 1000
 var population: int = 0
 var grid: Array[String] = []
+var terrain := PackedByteArray()  # TerrainDefs enum per cell
+var density := PackedByteArray()  # shanty density 1-3 (0 elsewhere)
+var landing_pad := Vector2i.ZERO  # top-left cell of the player's 2x2 pad
 
 # Derived stats, recomputed every tick.
 var power_supply: int = 0
@@ -18,11 +21,16 @@ var jobs: int = 0
 var housing: int = 0
 var employed: int = 0
 var net_income: int = 0
+var shanty_population: int = 0
 
 
-func _init() -> void:
+func _init(map_seed: int = 1) -> void:
 	grid.resize(SIZE * SIZE)
 	grid.fill("")
+	terrain.resize(SIZE * SIZE)
+	density.resize(SIZE * SIZE)
+	MapGenerator.generate(self, map_seed)
+	_count_shanty_population()
 
 
 func in_bounds(cell: Vector2i) -> bool:
@@ -33,12 +41,42 @@ func get_building(cell: Vector2i) -> String:
 	return grid[cell.y * SIZE + cell.x]
 
 
+func get_terrain(cell: Vector2i) -> int:
+	return terrain[cell.y * SIZE + cell.x]
+
+
+func get_density(cell: Vector2i) -> int:
+	return density[cell.y * SIZE + cell.x]
+
+
+func set_terrain(cell: Vector2i, type: int, level: int = 0) -> void:
+	terrain[cell.y * SIZE + cell.x] = type
+	density[cell.y * SIZE + cell.x] = level
+
+
+## Credits to clear the terrain on this cell, or -1 if it cannot be cleared.
+func clear_cost(cell: Vector2i) -> int:
+	var cost: int = TerrainDefs.DEFS[get_terrain(cell)]["clear_cost"]
+	if cost > 0 and get_terrain(cell) == TerrainDefs.SHANTY:
+		cost *= get_density(cell)
+	return cost
+
+
+func residents_at(cell: Vector2i) -> int:
+	return TerrainDefs.DEFS[get_terrain(cell)]["residents"] * get_density(cell)
+
+
 ## Returns "" on success, otherwise a message explaining why it failed.
 func build(cell: Vector2i, id: String) -> String:
 	if not in_bounds(cell):
 		return "Out of bounds."
 	if get_building(cell) != "":
 		return "That tile is taken. Demolish it first."
+	var ground: Dictionary = TerrainDefs.DEFS[get_terrain(cell)]
+	if not ground["buildable"]:
+		if clear_cost(cell) > 0:
+			return "%s is in the way. Clear it first." % ground["name"]
+		return "Can't build on %s." % ground["name"].to_lower()
 	var def: Dictionary = BuildingDefs.DEFS[id]
 	if money < def["cost"]:
 		return "Not enough credits for %s (%d needed)." % [def["name"], def["cost"]]
@@ -47,13 +85,31 @@ func build(cell: Vector2i, id: String) -> String:
 	return ""
 
 
+## Demolishes a building (50% refund) or clears shanty/rubble terrain (costs credits).
 func demolish(cell: Vector2i) -> String:
-	if not in_bounds(cell) or get_building(cell) == "":
-		return "Nothing to demolish there."
-	var def: Dictionary = BuildingDefs.DEFS[get_building(cell)]
-	money += def["cost"] / 2
-	grid[cell.y * SIZE + cell.x] = ""
+	if not in_bounds(cell):
+		return "Out of bounds."
+	if get_building(cell) != "":
+		var def: Dictionary = BuildingDefs.DEFS[get_building(cell)]
+		money += def["cost"] / 2
+		grid[cell.y * SIZE + cell.x] = ""
+		return ""
+	var cost := clear_cost(cell)
+	if cost < 0:
+		return "Nothing to clear there."
+	if money < cost:
+		return "Not enough credits to clear (%d needed)." % cost
+	money -= cost
+	set_terrain(cell, TerrainDefs.OPEN)
+	_count_shanty_population()
 	return ""
+
+
+func _count_shanty_population() -> void:
+	shanty_population = 0
+	for y in SIZE:
+		for x in SIZE:
+			shanty_population += residents_at(Vector2i(x, y))
 
 
 ## One simulation step (the Simulation node calls this once per second).

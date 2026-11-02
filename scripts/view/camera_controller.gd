@@ -28,5 +28,5 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _zoom_by(factor: float) -> void:
-	var z := clampf(zoom.x * factor, 0.4, 2.5)
+	var z := clampf(zoom.x * factor, 0.3, 2.5)
 	zoom = Vector2(z, z)

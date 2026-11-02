@@ -4,6 +4,7 @@ extends Node
 @onready var sim: Simulation = $Simulation
 @onready var view: CityView = $CityView
 @onready var hud: Hud = $Hud
+@onready var camera: Camera2D = $Camera
 
 var tool: String = "apartment"
 var _tools: Array = BuildingDefs.DEFS.keys() + ["demolish"]
@@ -12,8 +13,11 @@ var _tools: Array = BuildingDefs.DEFS.keys() + ["demolish"]
 func _ready() -> void:
 	view.setup(sim.city)
 	view.cell_clicked.connect(_on_cell_clicked)
+	view.cell_hovered.connect(func(cell): hud.show_tile_info(sim.city, cell))
 	hud.tool_selected.connect(_set_tool)
 	sim.ticked.connect(_refresh)
+	# Start the camera over the player's landing pad.
+	camera.position = view.cell_to_world(sim.city.landing_pad + Vector2i(1, 1))
 	_set_tool(tool)
 	_refresh()
 
@@ -29,7 +33,7 @@ func _set_tool(id: String) -> void:
 	tool = id
 	view.tool = id
 	hud.select_tool(id)
-	view.queue_redraw()
+	view.refresh()
 
 
 func _on_cell_clicked(cell: Vector2i) -> void:
@@ -37,8 +41,9 @@ func _on_cell_clicked(cell: Vector2i) -> void:
 	if error != "":
 		hud.show_message(error)
 	_refresh()
+	hud.show_tile_info(sim.city, cell)
 
 
 func _refresh() -> void:
 	hud.update_stats(sim.city)
-	view.queue_redraw()
+	view.refresh()

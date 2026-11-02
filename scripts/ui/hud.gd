@@ -7,6 +7,7 @@ signal tool_selected(id: String)
 var _stat_labels := {}
 var _buttons := {}
 var _message: Label
+var _tile_info: Label
 
 
 func _ready() -> void:
@@ -15,7 +16,7 @@ func _ready() -> void:
 	stats.add_theme_constant_override("separation", 28)
 	stats.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(stats)
-	for key in ["Credits", "Power", "Citizens", "Net/sec"]:
+	for key in ["Credits", "Power", "Citizens", "Net/sec", "Shanty"]:
 		var label := Label.new()
 		label.add_theme_font_size_override("font_size", 20)
 		stats.add_child(label)
@@ -28,10 +29,16 @@ func _ready() -> void:
 	bottom.grow_vertical = Control.GROW_DIRECTION_BEGIN
 	bottom.offset_bottom = -12
 
+	_tile_info = Label.new()
+	_tile_info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_tile_info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_tile_info.add_theme_color_override("font_color", Color(0.7, 0.85, 1.0))
+	bottom.add_child(_tile_info)
+
 	_message = Label.new()
 	_message.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_message.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_message.text = "Pick a building, then left-click a tile. Right-drag or arrows to pan, wheel to zoom."
+	_message.text = "Clear shanties with [5], then build on open lots. Right-drag or arrows to pan, wheel to zoom."
 	bottom.add_child(_message)
 
 	var row := HBoxContainer.new()
@@ -45,7 +52,7 @@ func _ready() -> void:
 		var def: Dictionary = BuildingDefs.DEFS[id]
 		_add_tool_button(row, group, id, "[%d] %s\n%d cr" % [n, def["name"], def["cost"]])
 		n += 1
-	_add_tool_button(row, group, "demolish", "[%d] Demolish\n50%% refund" % n)
+	_add_tool_button(row, group, "demolish", "[%d] Demolish / Clear\nrefund or cost" % n)
 
 
 func _add_tool_button(row: Container, group: ButtonGroup, id: String, text: String) -> void:
@@ -76,3 +83,22 @@ func update_stats(city: CityState) -> void:
 	var warn := Color(1.0, 0.3, 0.55)
 	_stat_labels["Power"].add_theme_color_override("font_color", warn if city.power_ratio < 1.0 else Color.WHITE)
 	_stat_labels["Net/sec"].add_theme_color_override("font_color", warn if city.net_income < 0 else Color.WHITE)
+	_stat_labels["Shanty"].text = "Shanty residents: %d" % city.shanty_population
+
+
+func show_tile_info(city: CityState, cell: Vector2i) -> void:
+	if not city.in_bounds(cell):
+		_tile_info.text = ""
+		return
+	var t := city.get_terrain(cell)
+	var text: String = TerrainDefs.DEFS[t]["name"]
+	if t == TerrainDefs.ROAD and city.get_density(cell) == 1:
+		text = "Alley"
+	elif t == TerrainDefs.SHANTY:
+		text += " (%s), %d residents" % [["sparse", "crowded", "packed"][city.get_density(cell) - 1], city.residents_at(cell)]
+	var id := city.get_building(cell)
+	if id != "":
+		text = BuildingDefs.DEFS[id]["name"]
+	elif city.clear_cost(cell) > 0:
+		text += ". Clear: %d cr" % city.clear_cost(cell)
+	_tile_info.text = text
